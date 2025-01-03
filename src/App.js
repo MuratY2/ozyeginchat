@@ -231,7 +231,7 @@ function App() {
       return;
     }
 
-    const socket = new WebSocket('ws://localhost:3001');
+    const socket = new WebSocket('https://a7b2-178-237-51-195.ngrok-free.app');
     // If deploying via ngrok or HTTPS, use wss://<your-ngrok-url>
 
     socket.onopen = async () => {
