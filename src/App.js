@@ -83,8 +83,8 @@ function App() {
   useEffect(() => {
     if (!user || !username) return;
 
-    const socket = new WebSocket('ws://localhost:3001');
-    // For production / Firebase + ngrok => 'wss://<yoursubdomain>.ngrok-free.app'
+    const socket = new WebSocket('https://a7b2-178-237-51-195.ngrok-free.app');
+    // For production / Firebase + ngrok 
 
     socket.onopen = () => {
       console.log('WebSocket connected.');
