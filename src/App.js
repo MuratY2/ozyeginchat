@@ -112,17 +112,16 @@ function App() {
   const [publicChatList, setPublicChatList] = useState([]);
   const publicChatRef = useRef(null);
 
-  // Private chat
+  // Private chat (two-ciphertext approach)
   const [privateChatList, setPrivateChatList] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
   const [privateMessage, setPrivateMessage] = useState('');
   const privateChatRef = useRef(null);
 
   // E2EE keys
-  const [publicKey, setPublicKey] = useState(null);   // CryptoKey
-  const [privateKey, setPrivateKey] = useState(null); // CryptoKey
+  const [publicKey, setPublicKey] = useState(null);   
+  const [privateKey, setPrivateKey] = useState(null); 
   const [cachedPubKeys, setCachedPubKeys] = useState({}); 
-  // e.g. { 'alice': CryptoKey, 'bob': CryptoKey }
 
   // Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -170,7 +169,7 @@ function App() {
           const importedPriv = await importPrivateKey(storedPriv);
           setPublicKey(importedPub);
           setPrivateKey(importedPriv);
-          console.log('Loaded existing RSA keys from localStorage.');
+          console.log('Loaded existing RSA keys from localStorage');
         } else {
           // Generate new pair
           console.log('Generating new RSA key pair...');
@@ -192,7 +191,7 @@ function App() {
           const privB64 = await exportPrivateKey(keyPair.privateKey);
           localStorage.setItem('myPubKey', pubB64);
           localStorage.setItem('myPrivKey', privB64);
-          console.log('Generated & stored RSA key pair in localStorage.');
+          console.log('Generated & stored new RSA key pair');
         }
       } catch (err) {
         console.error('Key init error:', err);
@@ -207,8 +206,8 @@ function App() {
   useEffect(() => {
     if (!user || !username || !publicKey || !privateKey) return;
 
-    const socket = new WebSocket('ws://localhost:3001');
-    // If you have HTTPS or ngrok, use wss://<your-ngrok-url>
+    const socket = new WebSocket('https://a7b2-178-237-51-195.ngrok-free.app');
+    // For production: use wss://<your-ngrok-url> if needed
 
     socket.onopen = async () => {
       console.log('WebSocket connected.');
@@ -235,42 +234,58 @@ function App() {
       if (data.type === 'init-public') {
         setPublicChatList(data.messages);
       }
-      // b) public-chat (plaintext)
+      // b) new public message (plaintext)
       else if (data.type === 'public-chat') {
         setPublicChatList((prev) => [...prev, data.message]);
       }
-      // c) init-private => decrypt relevant messages
+      // c) init-private => includes two ciphertext fields
       else if (data.type === 'init-private') {
-        const decrypted = [];
+        const decryptedAll = [];
         for (let pm of data.messages) {
-          // if it's from or to me, try to decrypt
-          if (pm.from === username || pm.to === username) {
+          // We'll store a local copy to not mutate pm
+          let localCopy = { ...pm };
+          // If I'm the recipient, decrypt text_for_recipient
+          if (pm.to === username) {
             try {
-              const plain = await decryptRSA(privateKey, pm.text);
-              pm.text = plain;
-            } catch {
-              // decryption failed, keep ciphertext
-            }
+              const plain = await decryptRSA(privateKey, pm.text_for_recipient);
+              localCopy.text_for_recipient = plain;
+            } catch {}
           }
-          decrypted.push(pm);
+          // If I'm the sender, decrypt text_for_sender
+          if (pm.from === username) {
+            try {
+              const plain = await decryptRSA(privateKey, pm.text_for_sender);
+              localCopy.text_for_sender = plain;
+            } catch {}
+          }
+          decryptedAll.push(localCopy);
         }
-        setPrivateChatList(decrypted);
+        setPrivateChatList(decryptedAll);
       }
-      // d) private-chat => a new message with ciphertext
+      // d) private-chat => a new message with 2 ciphertext fields
       else if (data.type === 'private-chat') {
         const pm = data.message;
-        // if it's from or to me, decrypt
-        if (pm.from === username || pm.to === username) {
+        let localCopy = { ...pm };
+
+        if (pm.to === username) {
           try {
-            const plain = await decryptRSA(privateKey, pm.text);
-            pm.text = plain;
+            const plain = await decryptRSA(privateKey, pm.text_for_recipient);
+            localCopy.text_for_recipient = plain;
           } catch {
-            console.log('Unable to decrypt private message for', pm.from, '->', pm.to);
+            console.log('Could not decrypt text_for_recipient');
           }
         }
-        setPrivateChatList((prev) => [...prev, pm]);
+        if (pm.from === username) {
+          try {
+            const plain = await decryptRSA(privateKey, pm.text_for_sender);
+            localCopy.text_for_sender = plain;
+          } catch {
+            console.log('Could not decrypt text_for_sender');
+          }
+        }
+        setPrivateChatList((prev) => [...prev, localCopy]);
       }
-      // e) response-publickey => the server giving me someone's pub key
+      // e) response-publickey => the server gives me someone's pub key
       else if (data.type === 'response-publickey') {
         const otherUser = data.username;
         const pubKeyB64 = data.publicKey;
@@ -368,42 +383,63 @@ function App() {
   };
 
   // ---------------------------------------------------
-  // 8) Private Chat (E2EE)
+  // 8) Private Chat with Two Ciphertexts
   // ---------------------------------------------------
-  // We assume we already have the recipient's key in cachedPubKeys (see handleSelectUser).
   const handleSendPrivateMessage = async () => {
     if (!ws || !selectedUser || !privateMessage.trim()) return;
 
-    const theirKey = cachedPubKeys[selectedUser];
+    // 1) Check if we have recipient's key
+    let theirKey = cachedPubKeys[selectedUser];
     if (!theirKey) {
       alert(`No public key for user: ${selectedUser}. Try re-selecting them.`);
       return;
     }
 
     try {
-      const cipher = await encryptRSA(theirKey, privateMessage.trim());
+      // 2) Encrypt for recipient
+      const cipher_for_recipient = await encryptRSA(theirKey, privateMessage.trim());
+
+      // 3) Encrypt for sender (myself), using my own public key
+      const cipher_for_sender = await encryptRSA(publicKey, privateMessage.trim());
+
+      // 4) Send both fields
       ws.send(JSON.stringify({
         type: 'private-chat',
         from: username,
         to: selectedUser,
-        text: cipher
+        text_for_recipient: cipher_for_recipient,
+        text_for_sender: cipher_for_sender
       }));
+
+      // Clear input
+      setPrivateMessage('');
     } catch (err) {
       console.error('Encryption error:', err);
     }
-
-    setPrivateMessage('');
   };
 
-  // Filter messages for current conversation
-  const privateMessagesWithSelected = privateChatList.filter(
-    (pm) =>
-      (pm.from === username && pm.to === selectedUser) ||
-      (pm.to === username && pm.from === selectedUser)
+  // We display whichever field we can decrypt in the UI
+  // For convenience, let's unify them as "displayText" in the render
+  const privateMessagesWithSelected = privateChatList.filter((pm) =>
+    (pm.from === username && pm.to === selectedUser) ||
+    (pm.to === username && pm.from === selectedUser)
   );
 
+  function getDisplayText(pm) {
+    // If I'm the sender, show text_for_sender if it exists
+    if (pm.from === username) {
+      return pm.text_for_sender || '...cipher...';
+    }
+    // If I'm the recipient, show text_for_recipient if it exists
+    if (pm.to === username) {
+      return pm.text_for_recipient || '...cipher...';
+    }
+    // else not my message
+    return '...cipher...';
+  }
+
   // ---------------------------------------------------
-  // 9) Search + Selecting a user => fetch their public key
+  // 9) Search for users & fetch their key
   // ---------------------------------------------------
   const handleSearch = async (e) => {
     const val = e.target.value;
@@ -437,13 +473,12 @@ function App() {
     }
   };
 
-  // When we pick a user from search, request their public key from server
+  // When we pick a user, request their pubkey
   const handleSelectUser = (uname) => {
     setSelectedUser(uname);
     setSearchResults([]);
     setSearchQuery('');
 
-    // If we don't have this user's key cached, ask the server
     if (!cachedPubKeys[uname] && ws) {
       ws.send(JSON.stringify({
         type: 'request-publickey',
@@ -465,7 +500,7 @@ function App() {
         alignItems: 'center'
       }}>
         <Title level={3} style={{ color: '#fff', margin: 0 }}>
-          OzyeginChat (E2EE Private)
+          OzyeginChat (Two-Ciphertext E2EE)
         </Title>
         {user && (
           <Button type="primary" onClick={handleLogout}>
@@ -565,7 +600,7 @@ function App() {
                       <List.Item.Meta
                         avatar={
                           <Avatar style={{ backgroundColor: '#87d068' }}>
-                            {chatItem.username.charAt(0).toUpperCase()}
+                            {chatItem.username?.charAt(0).toUpperCase()}
                           </Avatar>
                         }
                         title={
@@ -599,7 +634,7 @@ function App() {
               </div>
             </div>
 
-            {/* Right side: private chat (E2EE) */}
+            {/* Right side: private chat (two-ciphertext) */}
             <div style={{ flex: 1 }}>
               {selectedUser ? (
                 <>
@@ -618,37 +653,40 @@ function App() {
                     <List
                       itemLayout="horizontal"
                       dataSource={privateMessagesWithSelected}
-                      renderItem={(msg, idx) => (
-                        <List.Item
-                          key={idx}
-                          style={{
-                            backgroundColor: '#fefefe',
-                            borderRadius: '8px',
-                            marginBottom: '8px',
-                            padding: '10px'
-                          }}
-                        >
-                          <List.Item.Meta
-                            avatar={
-                              <Avatar style={{ backgroundColor: '#1890ff' }}>
-                                {msg.from.charAt(0).toUpperCase()}
-                              </Avatar>
-                            }
-                            title={
-                              <div style={{
-                                display: 'flex',
-                                justifyContent: 'space-between'
-                              }}>
-                                <span>{msg.from}</span>
-                                <span style={{ fontSize: '12px', color: '#888' }}>
-                                  {msg.timestamp}
-                                </span>
-                              </div>
-                            }
-                            description={msg.text}
-                          />
-                        </List.Item>
-                      )}
+                      renderItem={(msg, idx) => {
+                        const displayText = getDisplayText(msg);
+                        return (
+                          <List.Item
+                            key={idx}
+                            style={{
+                              backgroundColor: '#fefefe',
+                              borderRadius: '8px',
+                              marginBottom: '8px',
+                              padding: '10px'
+                            }}
+                          >
+                            <List.Item.Meta
+                              avatar={
+                                <Avatar style={{ backgroundColor: '#1890ff' }}>
+                                  {msg.from.charAt(0).toUpperCase()}
+                                </Avatar>
+                              }
+                              title={
+                                <div style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between'
+                                }}>
+                                  <span>{msg.from}</span>
+                                  <span style={{ fontSize: '12px', color: '#888' }}>
+                                    {msg.timestamp}
+                                  </span>
+                                </div>
+                              }
+                              description={displayText}
+                            />
+                          </List.Item>
+                        );
+                      }}
                     />
                   </div>
 
