@@ -69,7 +69,7 @@ function App() {
   useEffect(() => {
     if (!user || !username) return;
 
-    const socket = new WebSocket('https://b42f-178-237-51-195.ngrok-free.app');
+    const socket = new WebSocket('https://a7b2-178-237-51-195.ngrok-free.app');
 
     socket.onopen = () => {
       console.log('WebSocket connected (public chat).');
