@@ -34,7 +34,7 @@ function App() {
     // Only connect if user is logged in
     if (!user) return;
 
-    const socket = new WebSocket('ws://localhost:3001');
+    const socket = new WebSocket('https://b42f-178-237-51-195.ngrok-free.app');
 
     socket.onopen = () => {
       console.log('Connected to WebSocket server.');
