@@ -1,5 +1,5 @@
-// App.js (Part 2: Includes username creation + public chat + private chat)
-import React, { useEffect, useState } from 'react';
+// App.js (Part 1: Scrollable Chat UI)
+import React, { useEffect, useState, useRef } from 'react';
 import { Layout, List, Avatar, Typography, Button, Input, Modal } from 'antd';
 import { SearchOutlined, GoogleOutlined } from '@ant-design/icons';
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
@@ -35,13 +35,15 @@ function App() {
   // Public chat
   const [publicMessage, setPublicMessage] = useState('');
   const [publicChatList, setPublicChatList] = useState([]);
+  const publicChatRef = useRef(null); // For auto-scrolling
 
   // Private chat
-  const [privateChatList, setPrivateChatList] = useState([]); 
-  const [selectedUser, setSelectedUser] = useState(null); // user we’re chatting with
+  const [privateChatList, setPrivateChatList] = useState([]);
+  const [selectedUser, setSelectedUser] = useState(null);
   const [privateMessage, setPrivateMessage] = useState('');
+  const privateChatRef = useRef(null); // For auto-scrolling
 
-  // Search bar
+  // Search
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
 
@@ -76,40 +78,41 @@ function App() {
   }, []);
 
   // ----------------------------------
-  // 2) Connect WebSocket once username is available
+  // 2) Connect WebSocket after username is known
   // ----------------------------------
   useEffect(() => {
-    // Only connect if logged in + we have username
     if (!user || !username) return;
 
-    const socket = new WebSocket('https://a7b2-178-237-51-195.ngrok-free.app');
-    // For production / Firebase
+    const socket = new WebSocket('ws://localhost:3001');
+    // For production / Firebase + ngrok => 'wss://<yoursubdomain>.ngrok-free.app'
 
     socket.onopen = () => {
       console.log('WebSocket connected.');
-      // Register your username on the server
-      socket.send(JSON.stringify({
-        type: 'register-username',
-        username: username,
-      }));
+      // Register your username with the server
+      socket.send(
+        JSON.stringify({
+          type: 'register-username',
+          username: username,
+        })
+      );
     };
 
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data);
 
-      // a) Public init
+      // Public init
       if (data.type === 'init-public') {
         setPublicChatList(data.messages);
       }
-      // b) Public new message
+      // New public message
       else if (data.type === 'public-chat') {
         setPublicChatList((prev) => [...prev, data.message]);
       }
-      // c) Private init (optional, loads any existing private messages for you)
+      // Private init
       else if (data.type === 'init-private') {
-        setPrivateChatList(data.messages); 
+        setPrivateChatList(data.messages);
       }
-      // d) Private new message
+      // New private message
       else if (data.type === 'private-chat') {
         setPrivateChatList((prev) => [...prev, data.message]);
       }
@@ -132,7 +135,22 @@ function App() {
   }, [user, username]);
 
   // ----------------------------------
-  // 3) Google Login / Logout
+  // 3) Auto-scroll to bottom when public/private chat updates
+  // ----------------------------------
+  useEffect(() => {
+    if (publicChatRef.current) {
+      publicChatRef.current.scrollTop = publicChatRef.current.scrollHeight;
+    }
+  }, [publicChatList]);
+
+  useEffect(() => {
+    if (privateChatRef.current) {
+      privateChatRef.current.scrollTop = privateChatRef.current.scrollHeight;
+    }
+  }, [privateChatList, selectedUser]);
+
+  // ----------------------------------
+  // 4) Google Login / Logout
   // ----------------------------------
   const handleGoogleLogin = async () => {
     try {
@@ -154,7 +172,7 @@ function App() {
   };
 
   // ----------------------------------
-  // 4) Create Username Flow
+  // 5) Create Username Flow
   // ----------------------------------
   const handleCreateUsername = async () => {
     if (newUsername.trim() === '') return;
@@ -175,7 +193,7 @@ function App() {
   };
 
   // ----------------------------------
-  // 5) Public Chat
+  // 6) Public Chat
   // ----------------------------------
   const handleSendPublicMessage = () => {
     if (!ws || publicMessage.trim() === '') return;
@@ -191,7 +209,7 @@ function App() {
   };
 
   // ----------------------------------
-  // 6) Private Chat
+  // 7) Private Chat
   // ----------------------------------
   const handleSendPrivateMessage = () => {
     if (!ws || !selectedUser || privateMessage.trim() === '') return;
@@ -207,7 +225,6 @@ function App() {
     setPrivateMessage('');
   };
 
-  // Filter private messages with selectedUser only
   const privateMessagesWithSelected = privateChatList.filter(
     (pm) =>
       (pm.from === username && pm.to === selectedUser) ||
@@ -215,7 +232,7 @@ function App() {
   );
 
   // ----------------------------------
-  // 7) Search Function
+  // 8) Search for other users
   // ----------------------------------
   const handleSearch = async (e) => {
     const val = e.target.value;
@@ -227,10 +244,7 @@ function App() {
     }
 
     try {
-      // Example: search by "username" in Firestore
-      // We'll do a simple "where" with some constraints or a startAt / endAt for partial
       const usersRef = collection(db, 'users');
-      // This is a naive approach; for real partial search you might need a more advanced technique.
       const q = query(
         usersRef,
         orderBy('username'),
@@ -242,7 +256,7 @@ function App() {
       const results = [];
       querySnap.forEach((doc) => {
         const data = doc.data();
-        // Skip if it's your own username
+        // Skip yourself
         if (data.username !== username) {
           results.push(data);
         }
@@ -254,19 +268,17 @@ function App() {
     }
   };
 
-  // Clicking on a search result to open private chat
   const handleSelectUser = (uname) => {
     setSelectedUser(uname);
     setSearchResults([]);
     setSearchQuery('');
   };
 
-  // Show loading while checking auth state
   if (loading) return <div>Loading...</div>;
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      {/* HEADER */}
+      {/* Header */}
       <Header
         style={{
           backgroundColor: '#075E54',
@@ -286,9 +298,8 @@ function App() {
         )}
       </Header>
 
-      {/* CONTENT */}
+      {/* Content */}
       <Content style={{ padding: '16px', backgroundColor: '#EFEFEF' }}>
-        {/* If not logged in, show Google Sign In */}
         {!user ? (
           <div
             style={{
@@ -315,9 +326,8 @@ function App() {
           </div>
         ) : (
           <div style={{ display: 'flex', gap: '16px' }}>
-            {/* Left side: Search bar + Public Chat */}
+            {/* Left side: Search + Global Chat */}
             <div style={{ flex: '1' }}>
-              {/* SEARCH BAR */}
               <div style={{ position: 'relative' }}>
                 <Input
                   placeholder="Search users by username..."
@@ -326,7 +336,6 @@ function App() {
                   value={searchQuery}
                   onChange={handleSearch}
                 />
-                {/* Search results dropdown */}
                 {searchResults.length > 0 && (
                   <div
                     style={{
@@ -358,45 +367,60 @@ function App() {
               </div>
 
               <Title level={4}>Global Chat</Title>
-              <List
-                itemLayout="horizontal"
-                dataSource={publicChatList}
-                renderItem={(chatItem, index) => (
-                  <List.Item
-                    key={index}
-                    style={{
-                      backgroundColor: '#fff',
-                      borderRadius: '8px',
-                      marginBottom: '8px',
-                      padding: '10px',
-                    }}
-                  >
-                    <List.Item.Meta
-                      avatar={
-                        <Avatar style={{ backgroundColor: '#87d068' }}>
-                          {chatItem.username?.charAt(0).toUpperCase()}
-                        </Avatar>
-                      }
-                      title={
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                          }}
-                        >
-                          <span>{chatItem.username}</span>
-                          <span style={{ fontSize: '12px', color: '#888' }}>
-                            {chatItem.timestamp}
-                          </span>
-                        </div>
-                      }
-                      description={chatItem.text}
-                    />
-                  </List.Item>
-                )}
-              />
+              {/* Scrollable container for public messages */}
+              <div
+                ref={publicChatRef}
+                style={{
+                  maxHeight: '300px',
+                  overflowY: 'auto',
+                  marginBottom: '16px',
+                  background: '#fff',
+                  padding: '8px',
+                  borderRadius: '8px',
+                }}
+              >
+                <List
+                  itemLayout="horizontal"
+                  dataSource={publicChatList}
+                  renderItem={(chatItem, index) => (
+                    <List.Item
+                      key={index}
+                      style={{
+                        backgroundColor: '#fefefe',
+                        borderRadius: '8px',
+                        marginBottom: '8px',
+                        padding: '10px',
+                      }}
+                    >
+                      <List.Item.Meta
+                        avatar={
+                          <Avatar style={{ backgroundColor: '#87d068' }}>
+                            {chatItem.username?.charAt(0).toUpperCase()}
+                          </Avatar>
+                        }
+                        title={
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                            }}
+                          >
+                            <span>{chatItem.username}</span>
+                            <span
+                              style={{ fontSize: '12px', color: '#888' }}
+                            >
+                              {chatItem.timestamp}
+                            </span>
+                          </div>
+                        }
+                        description={chatItem.text}
+                      />
+                    </List.Item>
+                  )}
+                />
+              </div>
 
-              <div style={{ display: 'flex', marginTop: '16px' }}>
+              <div style={{ display: 'flex' }}>
                 <Input
                   placeholder="Type your public message..."
                   style={{ marginRight: '8px' }}
@@ -414,45 +438,60 @@ function App() {
               {selectedUser ? (
                 <>
                   <Title level={4}>Private Chat with {selectedUser}</Title>
-                  <List
-                    itemLayout="horizontal"
-                    dataSource={privateMessagesWithSelected}
-                    renderItem={(msg, idx) => (
-                      <List.Item
-                        key={idx}
-                        style={{
-                          backgroundColor: '#fff',
-                          borderRadius: '8px',
-                          marginBottom: '8px',
-                          padding: '10px',
-                        }}
-                      >
-                        <List.Item.Meta
-                          avatar={
-                            <Avatar style={{ backgroundColor: '#1890ff' }}>
-                              {msg.from.charAt(0).toUpperCase()}
-                            </Avatar>
-                          }
-                          title={
-                            <div
-                              style={{
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                              }}
-                            >
-                              <span>{msg.from}</span>
-                              <span style={{ fontSize: '12px', color: '#888' }}>
-                                {msg.timestamp}
-                              </span>
-                            </div>
-                          }
-                          description={msg.text}
-                        />
-                      </List.Item>
-                    )}
-                  />
+                  {/* Scrollable container for private messages */}
+                  <div
+                    ref={privateChatRef}
+                    style={{
+                      maxHeight: '300px',
+                      overflowY: 'auto',
+                      marginBottom: '16px',
+                      background: '#fff',
+                      padding: '8px',
+                      borderRadius: '8px',
+                    }}
+                  >
+                    <List
+                      itemLayout="horizontal"
+                      dataSource={privateMessagesWithSelected}
+                      renderItem={(msg, idx) => (
+                        <List.Item
+                          key={idx}
+                          style={{
+                            backgroundColor: '#fefefe',
+                            borderRadius: '8px',
+                            marginBottom: '8px',
+                            padding: '10px',
+                          }}
+                        >
+                          <List.Item.Meta
+                            avatar={
+                              <Avatar style={{ backgroundColor: '#1890ff' }}>
+                                {msg.from.charAt(0).toUpperCase()}
+                              </Avatar>
+                            }
+                            title={
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                }}
+                              >
+                                <span>{msg.from}</span>
+                                <span
+                                  style={{ fontSize: '12px', color: '#888' }}
+                                >
+                                  {msg.timestamp}
+                                </span>
+                              </div>
+                            }
+                            description={msg.text}
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  </div>
 
-                  <div style={{ display: 'flex', marginTop: '16px' }}>
+                  <div style={{ display: 'flex' }}>
                     <Input
                       placeholder={`Message @${selectedUser}`}
                       style={{ marginRight: '8px' }}
