@@ -1,76 +1,117 @@
-// App.js 
+// App.js (Part 1: Username flow + public chat)
 import React, { useEffect, useState } from 'react';
-import { Layout, List, Avatar, Typography, Button, Input } from 'antd';
+import { Layout, List, Avatar, Typography, Button, Input, Modal } from 'antd';
 import { SearchOutlined, GoogleOutlined } from '@ant-design/icons';
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
-import { auth, googleProvider } from './firebase'; 
+import {
+  collection,
+  getDocs,
+  query,
+  where,
+  addDoc,
+} from 'firebase/firestore';
+import { auth, googleProvider, db } from './firebase';
 import './App.css';
 
 const { Header, Content, Footer } = Layout;
 const { Title } = Typography;
 
 function App() {
-  // States for WebSocket
-  const [ws, setWs] = useState(null);
-  const [message, setMessage] = useState('');
-  const [messageList, setMessageList] = useState([]);
-
-  // States for Firebase Auth
+  // Firebase user states
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Connect to Firebase Auth once
+  // Username states
+  const [username, setUsername] = useState('');
+  const [showUsernameModal, setShowUsernameModal] = useState(false);
+  const [newUsername, setNewUsername] = useState('');
+
+  // WebSocket states
+  const [ws, setWs] = useState(null);
+  const [publicMessage, setPublicMessage] = useState('');
+  const [publicChatList, setPublicChatList] = useState([]);
+
+  // -----------------------------
+  // 1) Listen for auth changes
+  // -----------------------------
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       setLoading(false);
+
+      if (currentUser) {
+        // Check if user is in Firestore
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('email', '==', currentUser.email));
+        const querySnap = await getDocs(q);
+
+        if (querySnap.empty) {
+          // User does not exist => ask for username
+          setShowUsernameModal(true);
+        } else {
+          // If found, set local `username` and proceed
+          const docData = querySnap.docs[0].data();
+          setUsername(docData.username);
+        }
+      } else {
+        // Not logged in
+        setUsername('');
+      }
     });
+
     return () => unsubscribe();
   }, []);
 
-  // Connect to WebSocket after we know our auth state
-  // (so that we know who the user is before we start chatting)
+  // -----------------------------
+  // 2) Create WebSocket after we know our auth state & username
+  //    We'll connect only if user is logged in.
+  // -----------------------------
   useEffect(() => {
-    // Only connect if user is logged in
-    if (!user) return;
+    if (!user || !username) return;
 
-    const socket = new WebSocket('https://b42f-178-237-51-195.ngrok-free.app');
+    const socket = new WebSocket('https://a7b2-178-237-51-195.ngrok-free.app'); 
+    // If you're using ngrok or hosting the client, change above to wss://<your_ngrok_url>
 
     socket.onopen = () => {
-      console.log('Connected to WebSocket server.');
+      console.log('WebSocket connected (public chat).');
     };
 
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data);
 
-      if (data.type === 'init') {
-        setMessageList(data.messages);
-      } else if (data.type === 'chat') {
-        setMessageList((prev) => [...prev, data.message]);
+      // Initialize chat with existing public messages
+      if (data.type === 'init-public') {
+        setPublicChatList(data.messages);
+      }
+      // New public message
+      else if (data.type === 'public-chat') {
+        setPublicChatList((prev) => [...prev, data.message]);
       }
     };
 
     socket.onclose = () => {
-      console.log('WebSocket connection closed.');
+      console.log('WebSocket closed.');
     };
 
-    socket.onerror = (error) => {
-      console.error('WebSocket error:', error);
+    socket.onerror = (err) => {
+      console.error('WebSocket error:', err);
     };
 
     setWs(socket);
 
-    // Cleanup on component unmount
+    // Cleanup
     return () => {
       socket.close();
     };
-  }, [user]);
+  }, [user, username]);
 
-  // Auth button handlers
+  // -----------------------------
+  // 3) Google Login / Logout
+  // -----------------------------
   const handleGoogleLogin = async () => {
     try {
       await signInWithPopup(auth, googleProvider);
-      alert('Login successful!');
+      // The onAuthStateChanged listener will handle the rest
     } catch (error) {
       alert(error.message);
     }
@@ -85,23 +126,47 @@ function App() {
     }
   };
 
-  // Send message with the user’s email or displayName if user is logged in
-  const handleSendMessage = () => {
-    if (!ws || !message.trim()) return;
-    ws.send(
-      JSON.stringify({
-        type: 'chat',
-        id: user?.email || user?.displayName || 'UnknownUser',
-        text: message.trim(),
-      })
-    );
-    setMessage('');
+  // -----------------------------
+  // 4) Handle new username creation
+  // -----------------------------
+  const handleCreateUsername = async () => {
+    // Save to Firestore => users collection
+    if (newUsername.trim() === '') return;
+
+    try {
+      const usersRef = collection(db, 'users');
+      await addDoc(usersRef, {
+        email: user.email,
+        username: newUsername.trim(),
+      });
+      setUsername(newUsername.trim());
+      setShowUsernameModal(false);
+      setNewUsername('');
+    } catch (err) {
+      console.error('Error creating username:', err);
+      alert('Error creating username.');
+    }
   };
 
-  // Show "Loading" while we check auth status
-  if (loading) {
-    return <div>Loading...</div>;
-  }
+  // -----------------------------
+  // 5) Public chat message
+  // -----------------------------
+  const handleSendPublicMessage = () => {
+    if (!ws || publicMessage.trim() === '') return;
+
+    ws.send(
+      JSON.stringify({
+        type: 'public-chat',
+        username: username,
+        text: publicMessage.trim(),
+      })
+    );
+
+    setPublicMessage('');
+  };
+
+  // Show a spinner while checking auth
+  if (loading) return <div>Loading...</div>;
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -117,7 +182,6 @@ function App() {
         <Title level={3} style={{ color: '#fff', margin: 0 }}>
           OzyeginChat
         </Title>
-        {/* If logged in, show Logout button; otherwise hide */}
         {user && (
           <Button type="primary" onClick={handleLogout}>
             Logout
@@ -126,7 +190,6 @@ function App() {
       </Header>
 
       <Content style={{ padding: '16px', backgroundColor: '#EFEFEF' }}>
-        {/* If not logged in, show Google Sign In. Otherwise, show the chat. */}
         {!user ? (
           <div
             style={{
@@ -152,20 +215,22 @@ function App() {
             </Button>
           </div>
         ) : (
+          // Logged in => show public chat
           <div>
-            {/* Search bar (still just for visual) */}
+            {/* We keep the "Search or start new chat" bar for now, but no real search yet */}
             <Input
               placeholder="Search or start new chat"
               prefix={<SearchOutlined />}
               style={{ marginBottom: '16px', borderRadius: '8px' }}
             />
 
-            {/* Chat messages (from WebSocket) */}
+            {/* PUBLIC Chat messages */}
             <List
               itemLayout="horizontal"
-              dataSource={messageList}
-              renderItem={(chat) => (
+              dataSource={publicChatList}
+              renderItem={(chatItem, index) => (
                 <List.Item
+                  key={index}
                   style={{
                     backgroundColor: '#fff',
                     borderRadius: '8px',
@@ -174,28 +239,38 @@ function App() {
                   }}
                 >
                   <List.Item.Meta
-                    avatar={<Avatar style={{ backgroundColor: '#87d068' }}>{chat.id.charAt(0).toUpperCase()}</Avatar>}
+                    avatar={
+                      <Avatar style={{ backgroundColor: '#87d068' }}>
+                        {chatItem.username?.charAt(0).toUpperCase()}
+                      </Avatar>
+                    }
                     title={
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span>{chat.id}</span>
-                        <span style={{ fontSize: '12px', color: '#888' }}>{chat.timestamp}</span>
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                        }}
+                      >
+                        <span>{chatItem.username}</span>
+                        <span style={{ fontSize: '12px', color: '#888' }}>
+                          {chatItem.timestamp}
+                        </span>
                       </div>
                     }
-                    description={chat.text}
+                    description={chatItem.text}
                   />
                 </List.Item>
               )}
             />
 
-            {/* Send message input */}
             <div style={{ display: 'flex', marginTop: '16px' }}>
               <Input
                 placeholder="Type your message..."
                 style={{ marginRight: '8px' }}
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
+                value={publicMessage}
+                onChange={(e) => setPublicMessage(e.target.value)}
               />
-              <Button type="primary" onClick={handleSendMessage}>
+              <Button type="primary" onClick={handleSendPublicMessage}>
                 Send
               </Button>
             </div>
@@ -203,9 +278,32 @@ function App() {
         )}
       </Content>
 
-      <Footer style={{ textAlign: 'center', backgroundColor: '#075E54', color: '#fff' }}>
+      <Footer
+        style={{
+          textAlign: 'center',
+          backgroundColor: '#075E54',
+          color: '#fff',
+        }}
+      >
         OzyeginChat ©2024
       </Footer>
+
+      {/* Modal to ask for new username */}
+      <Modal
+        title="Choose a username"
+        visible={showUsernameModal}
+        onOk={handleCreateUsername}
+        onCancel={() => {}}
+        closable={false}
+        maskClosable={false}
+        okText="Save"
+      >
+        <Input
+          placeholder="Enter username"
+          value={newUsername}
+          onChange={(e) => setNewUsername(e.target.value)}
+        />
+      </Modal>
     </Layout>
   );
 }
