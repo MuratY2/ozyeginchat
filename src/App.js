@@ -500,7 +500,7 @@ function App() {
         alignItems: 'center'
       }}>
         <Title level={3} style={{ color: '#fff', margin: 0 }}>
-          OzyeginChat (Two-Ciphertext E2EE)
+          OzyeginChat 
         </Title>
         {user && (
           <Button type="primary" onClick={handleLogout}>
@@ -572,7 +572,7 @@ function App() {
                 )}
               </div>
 
-              <Title level={4}>Global Chat (Plaintext)</Title>
+              <Title level={4}>Global Chat</Title>
               <div
                 ref={publicChatRef}
                 style={{
