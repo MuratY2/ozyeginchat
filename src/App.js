@@ -206,7 +206,7 @@ function App() {
   useEffect(() => {
     if (!user || !username || !publicKey || !privateKey) return;
 
-    const socket = new WebSocket('https://68e8-178-237-51-195.ngrok-free.app');
+    const socket = new WebSocket('https://828a-178-237-51-195.ngrok-free.app');
     // For production: use wss://<your-ngrok-url> if needed
 
     socket.onopen = async () => {
